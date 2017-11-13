@@ -4,15 +4,15 @@ import java.util.concurrent.ForkJoinPool
 import java.util.concurrent.atomic.AtomicReference
 
 import scala.annotation.tailrec
+import scala.util.control.NonFatal
 import scala.concurrent.Await
 import scala.concurrent.duration._
 
-import scala.concurrent.{Future, Promise}
+import scala.concurrent.{ Future, Promise }
 
 import lattice.Key
 
 import org.opalj.graphs._
-
 
 /* Need to have reference equality for CAS.
  */
@@ -21,7 +21,7 @@ class PoolState(val handlers: List[() => Unit] = List(), val submittedTasks: Int
     submittedTasks == 0
 }
 
-class HandlerPool(parallelism: Int = 8) {
+class HandlerPool(parallelism: Int = 8, unhandledExceptionHandler: Throwable => Unit = _.printStackTrace()) {
 
   private val pool: ForkJoinPool = new ForkJoinPool(parallelism)
 
@@ -127,22 +127,24 @@ class HandlerPool(parallelism: Int = 8) {
     p.future
   }
 
-  /** Resolves a cycle of unfinished cells.
+  /**
+   * Resolves a cycle of unfinished cells.
    */
   private def resolveCycle[K <: Key[V], V](cells: Seq[Cell[K, V]]): Unit = {
     val key = cells.head.key
     val result = key.resolve(cells)
 
-    for((c, v) <- result) c.resolveWithValue(v)
+    for ((c, v) <- result) c.resolveWithValue(v)
   }
 
-  /** Resolves a cell with default value.
+  /**
+   * Resolves a cell with default value.
    */
   private def resolveDefault[K <: Key[V], V](cells: Seq[Cell[K, V]]): Unit = {
     val key = cells.head.key
     val result = key.fallback(cells)
 
-    for((c, v) <- result) c.resolveWithValue(v)
+    for ((c, v) <- result) c.resolveWithValue(v)
   }
 
   // Shouldn't we use:
@@ -166,6 +168,9 @@ class HandlerPool(parallelism: Int = 8) {
       def run(): Unit = {
         try {
           task.run()
+        } catch {
+          case NonFatal(e) =>
+            unhandledExceptionHandler(e)
         } finally {
           var success = false
           var handlersToRun: Option[List[() => Unit]] = None
